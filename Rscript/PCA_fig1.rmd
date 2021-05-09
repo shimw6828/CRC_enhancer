@@ -1,0 +1,175 @@
+---
+title: "PCA fig1"
+author: shimw
+date: 2021/5/8
+output: html_document
+---
+使用multiBamSummary的bin计数数据做PCA
+###导入数据
+```{r}
+library(dplyr)
+library(DESeq2)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+filepath = "/home/mwshi/project/TF_enrichment/bincount/readCounts.tab"
+countfile = readr::read_tsv(filepath)
+##因为字符header带" 所以去掉
+names(countfile) <- stringr::str_replace_all(names(countfile),"'","")
+countfile <- dplyr::rename(countfile,"chr"="#chr")
+```
+
+
+###去掉MT和Y染色体片段
+###整理样本metadata
+样本分组决定依靠细胞系，以及tumor和类器官分
+在metadata里顺便提取出对应marker
+```{r}
+#unique(countfile$chr)
+#其实没有看到MT染色体
+counts.noMT <- dplyr::filter(countfile,chr!="chrMT"&chr!="chrY")
+#unique(counts.noMT$chr)，确认去掉了Y染色体
+
+#将染色体位置变成行名
+##去掉之前在python中没有去掉的Input
+counts.noMT <- mutate(counts.noMT,nn=stringr::str_c(chr,start,end,sep = "_"))%>%select(-chr,-start,-end,-contains("Input"))
+counts.noMT <- tibble::column_to_rownames(counts.noMT,var = "nn")
+
+
+
+
+
+#整理数据
+#names(noMT)
+samples <- purrr::map(names(counts.noMT),function (.n){
+    tissuetype=unlist(stringr::str_split(.n,"_"))[1]
+    marker=unlist(stringr::str_split(.n,"_"))[2]
+    if(startsWith(.n, "Cellline")){
+        sampletype = unlist(stringr::str_split(.n,"_"))[3]
+        datagroup = unlist(stringr::str_split(.n,"_"))[length(unlist(stringr::str_split(.n,"_")))]
+    }else{
+        sampletype = unlist(stringr::str_split(.n,"_"))[1]
+        datagroup = "YAP"
+    }
+  data.frame("tissuetype"=tissuetype,
+             "marker"=marker,
+             "sampletype"=sampletype,
+             "datagroup"=datagroup,
+             "sample"=.n)
+})%>%dplyr::bind_rows()
+
+
+```
+
+###deseq标准化
+```{r}
+#做coldata
+###由于在design中不能包含 - ，只能是 _ ，所以必须对样本名进行更改
+samples$sampletype=factor(stringr::str_replace_all(samples$sampletype,"-","_"))
+row.names(samples)=stringr::str_replace_all(samples$sample,"-","_")
+###由于在design中不能包含 - ，只能是 _ ，所以必须对样本名进行更改
+names(counts.noMT) <- stringr::str_replace_all(names(counts.noMT) ,"-","_")
+
+
+dds <- DESeqDataSetFromMatrix(countData = counts.noMT,
+                              colData = samples,
+                              design = ~ sampletype)
+# Removing non-expressed bin
+dds <- dds[rowSums(counts(dds)) >= 10,]
+
+
+#Create dds and vst_count
+dds <- DESeq(dds)
+saveRDS(object = dds, file = "/home/mwshi/project/TF_enrichment/bincount/dds.rds")
+#dds <- readRDS("/home/mwshi/project/TF_enrichment/bincount/dds.rds")
+##vst_count <- rlog(dds, blind = FALSE)  RLOG太慢了
+vst_count <- vst(dds, blind = FALSE)
+
+#Save vst_count
+saveRDS(object = vst_count, file = "/home/mwshi/project/TF_enrichment/bincount/vst_count.rds")
+```
+###筛选5000 HVG
+```{r}
+rv <- rowVars(assay(vst_count))
+select <- order(rv, decreasing=TRUE)[seq_len(min(5000, length(rv)))]
+pca <- prcomp(t(assay(vst_count)[select,]))
+loadings=as.data.frame(pca$rotation)
+HVG=row.names(loadings)
+##原github中有去掉免疫相关基因，但是我们没办法定义bin的免疫相关基因
+##筛选CO， normal， organoids， tumor。
+m <- colData(vst_count)
+##"H3K27ac"和"H3K27Ac"不同，更改
+m$marker <- stringr::str_replace(m$marker,"H3K27Ac","H3K27ac")
+
+
+vst_count_filtered=(assay(vst_count)[row.names(assay(vst_count))%in%HVG,rownames(m[m$sampletype%in%c("CO","organoids","tumor","normal")&m$marker=="H3K27ac",])])
+
+```
+###PCA画图
+```{r}
+get_prcomp=function(vst_count_filtered, vst_count, PCA, PCB, color, shape=NULL) {
+
+  pca <- prcomp(t(vst_count_filtered), center=TRUE, scale=TRUE)
+  percentVar <- pca$sdev^2 / sum(pca$sdev^2)
+
+  A=as.numeric(gsub("PC", "", PCA))
+  B=as.numeric(gsub("PC", "", PCB))
+
+  pcaData = pca$x
+  pcaData = merge(pcaData, colData(vst_count), by="row.names")
+
+  if(is.null(shape) & color=="condition") {
+  color=pcaData[,color]
+
+   p = ggplot(data=pcaData, aes(x=pcaData[,PCA], y=pcaData[,PCB], fill=gsub("_", " ", color))) +
+       geom_point(size = 8, pch=21) + theme_classic() +
+  theme(axis.title = element_text(size=28),
+        axis.text = element_text(size=24),
+        legend.title = element_blank(),
+        legend.text = element_text(size=24), legend.key.size = unit(0.6,"cm")) +
+        xlab(paste0(PCA, ": ", round(percentVar[A] * 100),"% variance")) +
+        ylab(paste0(PCB, ": ", round(percentVar[B] * 100),"% variance")) +
+        scale_fill_manual(values=c("#99258A","#DA1781","#26DB32","green4")) +
+        guides(fill = guide_legend(override.aes=list(shape=21)))
+    ggsave(p,filename ="/home/mwshi/project/TF_enrichment/bincount/PCA.pdf",width = 12,height = 9 )
+  } else if(is.null(shape)) {
+  color=pcaData[,color]
+
+   p = ggplot(data=pcaData, aes(x=pcaData[,PCA], y=pcaData[,PCB], color=gsub("_", " ", color))) +
+geom_point(size = 8, pch=21) + theme_classic() +
+ theme(axis.title = element_text(size=28),
+        axis.text = element_text(size=24),
+        legend.title = element_blank(),
+        legend.text = element_text(size=24), legend.key.size = unit(0.6,"cm")) +
+        xlab(paste0(PCA, ": ", round(percentVar[A] * 100),"% variance")) +
+        ylab(paste0(PCB, ": ", round(percentVar[B] * 100),"% variance")) +
+        guides(fill = guide_legend(override.aes=list(shape=21)))
+ggsave(p,filename ="/home/mwshi/project/TF_enrichment/bincount/PCA.pdf",width = 12,height = 9 )
+
+  } else {
+  color=pcaData[,color]
+  shape=pcaData[,shape]
+
+  p = ggplot(data=pcaData, aes(x=pcaData[,PCA], y=pcaData[,PCB], fill=color, shape=gsub("_", " ", shape))) +
+  geom_point(size = 10, aes(colour=color), stroke = 1) +
+  theme_classic() +
+  theme(axis.title = element_text(size=28),
+        axis.text = element_text(size=24),
+        legend.title = element_blank(),
+        legend.text = element_text(size=24), legend.key.size = unit(0.6,"cm")) +
+        xlab(paste0(PCA, ": ", round(percentVar[A] * 100),"% variance")) +
+        ylab(paste0(PCB, ": ", round(percentVar[B] * 100),"% variance")) +
+    scale_shape_manual(values=c(21,24,23,22)) +
+    scale_fill_manual(values=c("#e41a1c", "#377eb8", "#FF62BC", "#984ea3", "#ff7f00", "#ffff33", "#a65628","#999999", "#65B7F3", "#4daf4a"))+
+    scale_colour_manual(values=c("#930708", "#073c68", "#891055", "#491051", "#b7610c", "#7c7c07", "#662d0c","#635f5f", "#1b5077", "#126610"))+
+    guides(fill = guide_legend(override.aes=list(shape=21)))
+ggsave(p,filename ="/home/mwshi/project/TF_enrichment/bincount/PCA.pdf",width = 12,height = 9 )
+  }
+
+}
+
+get_prcomp(vst_count_filtered,vst_count,"PC1","PC2","sampletype",shape = "sampletype")
+# -
+```
+
+
