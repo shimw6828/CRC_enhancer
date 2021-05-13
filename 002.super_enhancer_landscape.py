@@ -107,7 +107,7 @@ def multiBamSummary():
     e,f=getlabepair(newYAP_bam_path) 
     filepaths = a+c+e
     labels = b+d+f
-    cmd = "multiBamSummary BED-file /home/mwshi/project/CRC_enhancer/super_enhancer/overlap_merge.bed --bamfiles " +  " ".join(filepaths)
+    cmd = "multiBamSummary BED-file --BED /home/mwshi/project/CRC_enhancer/super_enhancer/overlap_merge.bed --bamfiles " +  " ".join(filepaths)
     cmd = cmd + " --minMappingQuality 30 -p 24 "
     cmd = cmd + "--labels " + " ".join(labels) + " "
     cmd = cmd + "-out /home/mwshi/project/CRC_enhancer/super_enhancer/CO_H3K27ac_readCounts.npz "
