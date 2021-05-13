@@ -3,7 +3,7 @@ sys.path.insert(1, "/home/zyang/software/MitEdit")
 from basic import Basic
 
 def getlabels(dir_path,datagroup):
-    ##由于代码字符大小写出错了，所以对input的筛选失败了，在R中筛选
+    ##由于代码字符大小写出错了，所以对input的筛选失败了，在R中筛�?
     files = os.listdir(dir_path)
     bam_file = []
     labels = []
@@ -46,13 +46,13 @@ def multiBamSummary():
     cmd = cmd + "--minMappingQuality 30 -p 24 "
     cmd = cmd + "--labels " + " ".join(CCLE_paired_labels+CCLE_single_labels+YAP_labels) + " "
     cmd = cmd + "-out "+"readCounts.npz --outRawCounts " +"readCounts.tab"
-    pbs_file = "/home/mwshi/project/TF_enrichment/bincount/multiBamSummary.pbs"
+    pbs_file = "/home/mwshi/project/CRC_enhancer/bincount/multiBamSummary.pbs"
     pbs = open(pbs_file,"w")
-    pbs.write("cd /home/mwshi/project/TF_enrichment/bincount/\n")
+    pbs.write("cd /home/mwshi/project/CRC_enhancer/bincount/\n")
     pbs.write(cmd+"\n")
     pbs.close()
     cmd = "qsub -q batch -l nodes=1:ppn=24 %s" % pbs_file
-    Basic.run(cmd, wkdir="/home/mwshi/project/TF_enrichment/bincount/")
+    Basic.run(cmd, wkdir="/home/mwshi/project/CRC_enhancer/bincount/")
 
 
 if __name__ == "__main__":
