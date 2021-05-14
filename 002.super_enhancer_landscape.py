@@ -1,5 +1,7 @@
 ###super enhancer绘制全局图
 import sys,os
+import pandas as pd
+import linecache
 sys.path.insert(1, "/home/zyang/software/MitEdit")
 from basic import Basic
 
@@ -119,8 +121,51 @@ def multiBamSummary():
     pbs.close()
     cmd = "qsub -q batch -l nodes=1:ppn=24 %s" % pbs_file
     Basic.run(cmd, wkdir="/home/mwshi/project/CRC_enhancer/pbs/")   
+
+def getsumcount(columns):
+    n = {}
+    for i in columns:
+        if i.endswith("CCLEpaired"):
+            ff = r"/home/mwshi/project/CRC_enhancer/chip_seq/CCLE_paired/"+i+".bam.flagstat"
+            with open(ff) as myfile:
+                n[i]=int([next(myfile) for x in range(5)][4].split()[0])
+        if i.endswith("CCLEsingle"):
+            ff = r"/home/mwshi/project/CRC_enhancer/chip_seq/CCLE_single/"+i+".bam.flagstat"
+            with open(ff) as myfile:
+                n[i]=int([next(myfile) for x in range(5)][4].split()[0])               
+        if i.endswith("YAP"):
+            ff = r"/home/mwshi/project/CRC_enhancer/chip_seq/YAP/"+i+".bam.flagstat"
+            with open(ff) as myfile:
+                n[i]=int([next(myfile) for x in range(5)][4].split()[0])    
+    return(n)
+
+###计算rpm和tpm方便绘图
+def calculate_rpm():
+    df = pd.read_csv("/home/mwshi/project/CRC_enhancer/super_enhancer/CO_H3K27ac_readCounts.tab", sep="\t")
+    df.columns = [x.strip("#").replace("'","") for x in df.columns] #改一下列名
+    ##获得测序深度
+    sums = getsumcount(list(df.columns))
+    for column,value in df.iteritems():
+        if column=="chr" or column=="start" or column=="end":
+            continue
+        df[column] = round(value / sums[column] * 1000000, 2)
+    df.to_csv("/home/mwshi/project/CRC_enhancer/super_enhancer/super_enhancer_rpm.csv")
+
+def calculate_tpm():
+    df = pd.read_csv("/home/mwshi/project/CRC_enhancer/super_enhancer/CO_H3K27ac_readCounts.tab", sep="\t")
+    df.columns = [x.strip("#").replace("'","") for x in df.columns] #改一下列名
+    ##获得测序深度
+    region_length = abs( df['end'] - df['start'])
+    for column,value in df.iteritems():
+        if column=="chr" or column=="start" or column=="end":
+            continue
+        sums = sum(df[column] / region_length)
+        df[column] = round(value / region_length / sums * 1000000, 2)
+    df.to_csv("/home/mwshi/project/CRC_enhancer/super_enhancer/super_enhancer_tpm.csv")  
     
     
+
+
 if __name__ == "__main__":
     ##step 1
     merge_bed()
