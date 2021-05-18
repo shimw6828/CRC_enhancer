@@ -32,7 +32,6 @@ def extract_fastq():
         Basic.run(cmd, wkdir=pbs_dir)
 
 def parse_metadata():
-    #ÔÚhotspotÖÐ£¬ËùÓÐÑù±¾chipÑù±¾¶¼ÊÇsingle²âÐò
     fastq_dir = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/fastq"
     meta_data = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/meta_hotspot.txt"
     new_fastq_dir = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/rename_fastq/"
@@ -104,7 +103,7 @@ def fastqc():
 def bowtie_index():
     #build bowtie 1 index
     #this function has not used in bowtie2, because I have build reference index long long ago
-    #ÒÑ¾­ÅÜ¹ý£¬²»ÓÃÅÜÁË
+    #å·²ç»è·‘è¿‡ï¼Œä¸ç”¨è·‘äº†
     reference_dir = "/home/zhluo/Project/CRC/data_nazhang/step56_human_CRC/reference_genome/"
     reference = "/home/zhluo/Project/CRC/data_nazhang/step56_human_CRC/reference_genome/GRCh37.p13.genome.fa"
     cmd = "bowtie-build --threads 20 %s %s" %(reference, reference)
@@ -115,7 +114,7 @@ def bowtie_index():
     Basic.run(cmd, wkdir= reference_dir)
 
 def cut_adapt():
-    ##µ¥¶Ë²âÐò²»ÅÜÕâ¸ö
+    ##å•ç«¯æµ‹åºä¸è·‘è¿™ä¸ª
     fastq_dir = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/rename_fastq"
     cut_adapt_fastq = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/cut_fastq"
     #bowtie_dir = "/home/zhluo/Project/TF_enrichment/bowtie_mapping_paired"
@@ -145,11 +144,11 @@ def cut_adapt():
         Basic.run(cmd, wkdir= pbs_dir)
     
 def fastp():
-    ###ËäÈ»¶Ì£¬µ«ÊÇ»¹ÊÇÅÜÒ»ÏÂ
+    ###è™½ç„¶çŸ­ï¼Œä½†æ˜¯è¿˜æ˜¯è·‘ä¸€ä¸‹
     fastq_dir = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/rename_fastq/"
-    fastp_paired = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/fastp_fastq"
-    outputDir = fastp_paired
-    Basic.mkdir(fastp_paired)
+    fastp_dir = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/fastp_fastq"
+    outputDir = fastp_dir
+    Basic.mkdir(fastp_dir)
     pbs_dir = "/home/mwshi/project/CRC_enhancer/pbs/cutadapt_pbs"
     for one_sample in os.listdir(fastq_dir):
         if ".log" in one_sample:
@@ -174,11 +173,17 @@ def fastp():
 
 
 def bowtie_align_single():
-    merge_fastq_dir = "/home/zhluo/Project/TF_enrichment/data_part/single"
-    bowtie_dir = "/home/zhluo/Project/TF_enrichment/bowtie_mapping_single"
-    pbs_dir = "/home/zhluo/Project/TF_enrichment/pbs/mapping_single"
+    merge_fastq_dir = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/fastp_fastq"
+    bowtie_dir = "/home/mwshi/project/CRC_enhancer/chip_seq/Hotspots/"
+    pbs_dir = "/home/mwshi/project/CRC_enhancer/pbs/mapping_single"
+    Basic.mkdir(bowtie_dir)
+    Basic.mkdir(pbs_dir)
     for one_sample in os.listdir(merge_fastq_dir):
         if ".log" in one_sample:
+            continue
+        if ".html" in one_sample:
+            continue
+        if ".json" in one_sample:
             continue
         sample_id = one_sample.replace(".fastq.gz", "")
         file_path = os.path.join(merge_fastq_dir, one_sample)
@@ -194,8 +199,67 @@ def bowtie_align_single():
         cmd = "qsub -l nodes=1:ppn=7 %s" % (pbs_file)
         #print(cmd)
         Basic.run(cmd, wkdir= pbs_dir)
-
         
+def mk_idx_flagstat():
+    ##Input_GSM2058062æ–‡ä»¶è´¨é‡å¤ªå·®ï¼Œç»Ÿè®¡ä¹‹åŽå¾ˆå°
+    #bowtie_dir = "/home/zhluo/Project/TF_enrichment/bowtie_mapping_paired"
+    bowtie_dir = "/home/mwshi/project/CRC_enhancer/chip_seq/Hotspots"
+    pbs_dir = "/home/mwshi/project/CRC_enhancer/pbs/flagstat"
+    Basic.mkdir(pbs_dir)
+    for one_sample in os.listdir(bowtie_dir):
+        print(one_sample)
+        if ".flagstat" in one_sample:
+            continue
+        if ".log" in one_sample:
+            continue
+        if ".bai" in one_sample:
+            continue
+        if ".sorted.bam" in one_sample:
+            file_path = os.path.join(bowtie_dir, one_sample)
+            pbs_file = os.path.join(pbs_dir, "step6_" + one_sample + ".single.flagstat.pbs")
+            #sample_id = one_sample.split(".")[0]
+            flagstat_file = os.path.join(bowtie_dir, one_sample + ".flagstat")
+            pbs_handle = open(pbs_file, "w")
+            cmd = "samtools index %s;" % file_path
+            pbs_handle.write(cmd)
+            cmd = "samtools flagstat %s > %s;" % (file_path, flagstat_file)
+            pbs_handle.write(cmd)
+            pbs_handle.close()
+            cmd = "qsub -l nodes=1:ppn=1 %s" % (pbs_file)
+            Basic.run(cmd, wkdir= pbs_dir)
+
+def makebw_single():
+    downsample_dir = "/home/mwshi/project/CRC_enhancer/chip_seq/Hotspots"
+    pbs_dir = "/home/mwshi/project/CRC_enhancer/pbs/makebw"
+    bigwig_dir = "/home/mwshi/project/CRC_enhancer/makebw/Hotspots"
+    Basic.mkdir(pbs_dir)
+    Basic.mkdir(bigwig_dir)    
+    
+    #only sample, no substract input
+    for one_file in os.listdir(downsample_dir):
+        if ".log" in one_file:
+            continue
+        if ".bai" in one_file:
+            continue
+        file_path = os.path.join(downsample_dir, one_file)
+        #sample_name = file_path.split(".")[0]
+        #sample_name = sample_name.split("_")[2]
+        #print(sample_name)
+        #cmd = "bamCompare --bamfile1 %s --bamfile2 {input[0]} --normalizeUsingRPKM --ratio subtract --binSize 30 --smoothLength 300 -p 5  --extendReads 200 -o {output} 2> {log}" %(file_path)
+        output_file = os.path.join(bigwig_dir, one_file + ".bw")
+        log_file = os.path.join(bigwig_dir, one_file + ".bamCoverage.log")
+        cmd = "bamCoverage -b %s --normalizeUsing RPKM --binSize 30 --smoothLength 300 -p 5 --extendReads 200 -o %s 2> %s;" %(file_path, output_file, log_file)
+        pbs_file = os.path.join(pbs_dir, one_file + ".makebw.pbs")
+        handle = open(pbs_file, "w")
+        handle.write(cmd)
+        handle.close()
+        cmd = "qsub -l nodes=1:ppn=5 %s" % pbs_file
+        Basic.run(cmd, wkdir=pbs_dir)
+        
+def rename_bam():
+    bowtie_dir = "/home/zhluo/Project/CRC/data_nazhang/step56_human_CRC/bowtie_mapping"
+    rename_dir = "/home/zhluo/Project/CRC/data_nazhang/step56_human_CRC/rename_bam"
+
 if __name__ == "__main__":        
     ##step 1
     #transfer_file()
@@ -211,12 +275,13 @@ if __name__ == "__main__":
     #bowtie_align_paired()
     #bowtie_align_single()
     #mk_idx_flagstat()
-    #rename_bam()
+    
     #mk_idx_flagstat()
-    create_chromhmm_matrix()
+    #create_chromhmm_matrix()
     #parse_flagstat()
     #makebw_paired()
     #makebw_single()
+    rename_bam()
     #find_sample_input()
     #macs2_call_peaks()
     #rename_peak_file()
