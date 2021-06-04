@@ -3,7 +3,7 @@ sys.path.insert(1, "/home/zyang/software/MitEdit")
 from basic import Basic
 
 def getlabels(dir_path,datagroup):
-    ##由于代码字符大小写出错了，所以对input的筛选失败了，在R中筛�?
+    ##由于代码字符大小写出错了，所以对input的筛选失败了，在R中筛??
     files = os.listdir(dir_path)
     bam_file = []
     labels = []

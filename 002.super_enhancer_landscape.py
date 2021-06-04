@@ -149,7 +149,7 @@ def calculate_rpm():
         if column=="chr" or column=="start" or column=="end":
             continue
         df[column] = round(value / sums[column] * 1000000, 2)
-    df.to_csv("/home/mwshi/project/CRC_enhancer/super_enhancer/super_enhancer_rpm.csv")
+    df.to_csv("/home/mwshi/project/CRC_enhancer/super_enhancer/super_enhancer_rpm.csv",index=0)
 
 def calculate_tpm():
     df = pd.read_csv("/home/mwshi/project/CRC_enhancer/super_enhancer/CO_H3K27ac_readCounts.tab", sep="\t")
@@ -161,7 +161,7 @@ def calculate_tpm():
             continue
         sums = sum(df[column] / region_length)
         df[column] = round(value / region_length / sums * 1000000, 2)
-    df.to_csv("/home/mwshi/project/CRC_enhancer/super_enhancer/super_enhancer_tpm.csv")  
+    df.to_csv("/home/mwshi/project/CRC_enhancer/super_enhancer/super_enhancer_tpm.csv",index=0)  
     
     
 
@@ -172,4 +172,6 @@ if __name__ == "__main__":
     lnfiles()
     ##step 2
     multiBamSummary()
+    calculate_rpm()
+    calculate_tpm()
     

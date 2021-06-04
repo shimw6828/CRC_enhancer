@@ -33,14 +33,16 @@ def extract_fastq():
 
 def parse_metadata():
     fastq_dir = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/fastq"
-    meta_data = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/meta_hotspot.txt"
+    meta_data = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/meta_hotspot.csv"
     new_fastq_dir = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/rename_fastq/"
     Basic.mkdir(new_fastq_dir)
     meta_df = pd.read_csv(meta_data, sep=",")
     #print(meta_df.columns)
-    meta_sub = meta_df[["Run", "source_name", "Tissue", "chip_antibody", "Sample Name"]]
+    meta_sub = meta_df[["Run", "source_name", "Tissue", "chip_antibody", "Sample Name","cell_line"]]
     print(meta_sub[0:5])  
     #single
+    w = open('/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/new_meta_hotspot.csv',"w")
+    w.write("GEO,type,marker,cell_line,bamfile\n")
     for one_sample in meta_sub.iterrows():
         print(one_sample)
         sample_id = one_sample[1]['Run']
@@ -50,23 +52,28 @@ def parse_metadata():
             sample_type = "tumor"
         elif one_sample[1]['Tissue']=='normal colon crypt':
             sample_type = "normal"
-        if 'H3K27ac' in one_sample[1]['Tissue']:
+        if 'H3K27ac' in str(one_sample[1]['chip_antibody']):
             marker = "H3K27ac"
-        elif 'H3K27me3' in one_sample[1]['Tissue']:
+        elif 'H3K27me3' in str(one_sample[1]['chip_antibody']):
             marker = "H3K27me3"
-        elif 'H3K4me1' in one_sample[1]['Tissue']:
+        elif 'H3K4me1' in str(one_sample[1]['chip_antibody']):
             marker = "H3K4me1"
         else:
-             marker = "ChIP_Input"
-        new_id = "_".join([sample_type,marker,one_sample[1]['Sample Name'],"Hotspot"])
+            marker = "ChIP_Input"
+        
+        new_id = "_".join([sample_type,marker,one_sample[1]['cell_line'],"Hotspot"])
         old_path = os.path.join(fastq_dir, one_sample[1]['Run'] + ".fastq.gz")
         new_path = os.path.join(new_fastq_dir, new_id + ".fastq.gz")
+        line = ",".join([sample_id,sample_type,marker,one_sample[1]['cell_line'],new_path])
+        w.write(line+"\n")
         #print(new_path)
         if os.path.exists(new_path):
             print("error, soft link exits")
+            print(one_sample)
             exit(1)
         cmd = "ln -s %s %s" % (old_path, new_path)
         Basic.run(cmd)
+    w.close()
 
  
  
@@ -98,7 +105,31 @@ def fastqc():
         cmd = "qsub -l nodes=1:ppn=7 %s" % pbs_file
         print(cmd)
         Basic.run(cmd, wkdir=pbs_dir)
-                   
+
+def parse_sampleinfo():
+    meta_data = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/new_meta_hotspot.csv"
+    meta_df = pd.read_csv(meta_data, sep=",")
+    print(meta_df[0:5])  
+    #single
+    w = open('/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/sampleinfo.csv',"w")
+    w.write("GEO,type,marker,cell_line,bamfile,inputfile\n")
+    for one_sample in meta_df.iterrows():
+        print(one_sample)
+        if one_sample[1]['marker']=="ChIP_Input":
+            continue
+        GEO = one_sample[1]['GEO']
+        sampletype = one_sample[1]['type']
+        marker = one_sample[1]['marker']
+        cell_line = one_sample[1]['cell_line']
+        bamfile = one_sample[1]['bamfile'].split("/")[-1].split(".")[0] + ".sorted.bam"
+        inputdf = meta_df[(meta_df["cell_line"]==cell_line) & (meta_df["type"]==sampletype) & (meta_df["marker"]=='ChIP_Input')]
+        if inputdf.empty:
+            inputfile = "no"
+        else:
+            inputfile = inputdf['bamfile'].iloc[0].split("/")[-1].split(".")[0] + ".sorted.bam"       
+        line = ",".join([GEO,sampletype,marker,cell_line,bamfile,inputfile])
+        w.write(line+"\n")
+    w.close()                   
     
 def bowtie_index():
     #build bowtie 1 index
@@ -113,35 +144,6 @@ def bowtie_index():
     cmd = "qsub -l nodes=1:ppn=20 %s" % ("/home/zhluo/Project/CRC/data_nazhang/step56_human_CRC/pbs/bowtie_idx.pbs")
     Basic.run(cmd, wkdir= reference_dir)
 
-def cut_adapt():
-    ##单端测序不跑这个
-    fastq_dir = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/rename_fastq"
-    cut_adapt_fastq = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/cut_fastq"
-    #bowtie_dir = "/home/zhluo/Project/TF_enrichment/bowtie_mapping_paired"
-    pbs_dir = "/home/mwshi/project/CRC_enhancer/pbs/cutadapt_pbs"
-    Basic.mkdir(cut_adapt_fastq)
-    Basic.mkdir(pbs_dir)
-    #sample_list = []
-    for one_sample in os.listdir(fastq_dir):
-        if ".log" in one_sample:
-            continue
-        sample_id = one_sample.replace(".fastq.gz", "")
-        #print(sample_id)
-        fastq_1 = os.path.join(fastq_dir, one_sample)
-        log_file = os.path.join(cut_adapt_fastq, sample_id + ".cut.log")
-        cut_fastq_1 = os.path.join(cut_adapt_fastq, one_sample)
-        cmd = "/home/zhluo/.local/bin/cutadapt -j 5 -u 10 -u -15 -U 10 -U -15 -m 40 -o %s %s 2> %s;" %(cut_fastq_1, fastq_1, log_file)
-        #out_file = os.path.join(bowtie_dir, sample_id + ".sorted.bam")
-        #tmp_prefix = os.path.join(bowtie_dir, sample_id + ".sorted.bam.tmp")
-        #markdup_log = os.path.join(bowtie_dir, sample_id + ".mkdup.log")
-        
-        pbs_file = os.path.join(pbs_dir, "step3_" + one_sample + ".cutadapt.pbs")
-        pbs_handle = open(pbs_file, "w")
-        pbs_handle.write(cmd)
-        pbs_handle.close()
-        cmd = "qsub -l nodes=1:ppn=5 %s" % (pbs_file)
-        #print(cmd)
-        Basic.run(cmd, wkdir= pbs_dir)
     
 def fastp():
     ###虽然短，但是还是跑一下
@@ -149,7 +151,8 @@ def fastp():
     fastp_dir = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/fastp_fastq"
     outputDir = fastp_dir
     Basic.mkdir(fastp_dir)
-    pbs_dir = "/home/mwshi/project/CRC_enhancer/pbs/cutadapt_pbs"
+    pbs_dir = "/home/mwshi/project/CRC_enhancer/pbs/fastp_pbs"
+    Basic.mkdir(pbs_dir)
     for one_sample in os.listdir(fastq_dir):
         if ".log" in one_sample:
             continue
@@ -201,7 +204,7 @@ def bowtie_align_single():
         Basic.run(cmd, wkdir= pbs_dir)
         
 def mk_idx_flagstat():
-    ##Input_GSM2058062文件质量太差，统计之后很小
+    ##normal_H3K4me1_Crypt5_Hotspot.sorted.bam文件质量太差，统计之后很小
     #bowtie_dir = "/home/zhluo/Project/TF_enrichment/bowtie_mapping_paired"
     bowtie_dir = "/home/mwshi/project/CRC_enhancer/chip_seq/Hotspots"
     pbs_dir = "/home/mwshi/project/CRC_enhancer/pbs/flagstat"
@@ -256,10 +259,89 @@ def makebw_single():
         cmd = "qsub -l nodes=1:ppn=5 %s" % pbs_file
         Basic.run(cmd, wkdir=pbs_dir)
         
-def rename_bam():
-    bowtie_dir = "/home/zhluo/Project/CRC/data_nazhang/step56_human_CRC/bowtie_mapping"
-    rename_dir = "/home/zhluo/Project/CRC/data_nazhang/step56_human_CRC/rename_bam"
+def macs2_call_peaks():
+    CRC_file = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/sampleinfo.csv"
+    input_dir = "/home/mwshi/project/CRC_enhancer/chip_seq/Hotspots"
+    output_dir = "/home/mwshi/project/CRC_enhancer/macs2_peak/Hotspots"
+    bam_dir = '/home/mwshi/project/CRC_enhancer/chip_seq/Hotspots'
+    pbs_dir = "/home/mwshi/project/CRC_enhancer/pbs/call_peak"
+    Basic.mkdir(output_dir)
+    Basic.mkdir(pbs_dir)
+    df = pd.read_csv(CRC_file, sep=",")
+    for idx,row in df.iterrows():
+        marker_bam = os.path.join(input_dir, row["bamfile"])
+        input_ctrl = os.path.join(input_dir, row["inputfile"])
+        sample_id = row["bamfile"].replace(".sorted.bam", "")
+        peak_file_prefix = sample_id + ".macs2"
+        log_file = os.path.join(output_dir, sample_id + ".macs2_callpeak.log")
+        if row["inputfile"] == "no":
+            cmd = "macs2 callpeak -t %s --keep-dup all -f %s -g hs --outdir %s -n %s -p 1e-5 --broad --broad-cutoff 1e-5 --nomodel &> %s;" %(marker_bam, 'BAM', output_dir, peak_file_prefix, log_file)
+                #print(cmd)
+        else:
+            cmd = "macs2 callpeak -t %s -c %s --keep-dup all -f %s -g hs --outdir %s -n %s -p 1e-5 --broad --broad-cutoff 1e-5 --nomodel &> %s;" %(marker_bam, input_ctrl, 'BAM', output_dir, peak_file_prefix, log_file)
+        pbs_file = os.path.join(pbs_dir, sample_id + ".macs2.Hotspots.pbs")
+        handle = open(pbs_file, "w")
+        handle.write(cmd)
+        handle.close()
+        cmd = "qsub -l nodes=1:ppn=1 %s" % pbs_file
+        #print(cmd)
+        Basic.run(cmd, wkdir=pbs_dir)
 
+def rename_peak_file():
+    peak_dir = "/home/mwshi/project/CRC_enhancer/macs2_peak/Hotspots/"
+    peak_rename_dir = "/home/mwshi/project/CRC_enhancer/macs2_peak/rename_Hotspots"
+    Basic.mkdir(peak_rename_dir)
+    for one_file in os.listdir(peak_dir):
+        if "broadPeak" not in one_file:
+            continue
+        peak_file = os.path.join(peak_dir, one_file)
+        new_peak_file = os.path.join(peak_rename_dir, one_file + ".bed")
+        cmd = "ln -s %s %s" % (peak_file, new_peak_file)
+        Basic.run(cmd)        
+
+def super_enhancer():
+    CRC_file = "/home/mwshi/project/CRC_enhancer/rawdata/Hotspots/sampleinfo.csv"
+    input_dir = "/home/mwshi/project/CRC_enhancer/chip_seq/Hotspots"
+    output_dir = "/home/mwshi/project/CRC_enhancer/super_enhancer/Hotspots"
+    pbs_dir = "/home/mwshi/project/CRC_enhancer/pbs/super_enhancer"
+    peak_dir = "/home/mwshi/project/CRC_enhancer/macs2_peak/rename_Hotspots"
+    Basic.mkdir(pbs_dir)
+    Basic.mkdir(output_dir)
+    df = pd.read_csv(CRC_file, sep=",")
+    for idx,row in df.iterrows():
+        if row["inputfile"] == "no":
+            bam_dir = "/home/mwshi/project/CRC_enhancer/chip_seq/Hotspots"  
+            marker_bam = os.path.join(bam_dir, row["bamfile"])
+            peak_file = os.path.join(peak_dir, row["bamfile"].split(".")[0] + ".macs2_peaks.broadPeak.bed")
+            cmd = "cd /home/zhluo/Project/TF_enrichment/rose; /home/zxchen/anaconda3/bin/python2 /home/zhluo/Project/TF_enrichment/rose/ROSE_main.py -g hg19 -i  %s -r %s -o %s -a /home/zhluo/Project/TF_enrichment/rose;" %(peak_file, marker_bam, output_dir)
+            sample_id = row["bamfile"].replace(".sorted.bam", "")
+            pbs_file = os.path.join(pbs_dir, sample_id + ".superenhancer.Hotspots.pbs")
+            handle = open(pbs_file, "w")
+            handle.write(cmd)
+            handle.close()
+            print(cmd)
+            cmd = "qsub -l nodes=1:ppn=1 %s" % pbs_file
+            #print(cmd)
+            Basic.run(cmd, wkdir=pbs_dir)  
+        else:
+            bam_dir = "/home/mwshi/project/CRC_enhancer/chip_seq/Hotspots"  
+            marker_bam = os.path.join(bam_dir, row["bamfile"])
+            input_ctrl = os.path.join(input_dir, row["inputfile"])
+            peak_file = os.path.join(peak_dir, row["bamfile"].split(".")[0] + ".macs2_peaks.broadPeak.bed")
+            cmd = "cd /home/zhluo/Project/TF_enrichment/rose; /home/zxchen/anaconda3/bin/python2 /home/zhluo/Project/TF_enrichment/rose/ROSE_main.py -g hg19 -i  %s -r %s -c %s -o %s -a /home/zhluo/Project/TF_enrichment/rose;" %(peak_file, marker_bam, input_ctrl, output_dir)
+            sample_id = row["bamfile"].replace(".sorted.bam", "")
+            pbs_file = os.path.join(pbs_dir, sample_id + ".superenhancer.Hotspots.pbs")
+            handle = open(pbs_file, "w")
+            handle.write(cmd)
+            handle.close()
+            print(cmd)
+            cmd = "qsub -l nodes=1:ppn=1 %s" % pbs_file
+            #print(cmd)
+            Basic.run(cmd, wkdir=pbs_dir)        
+    
+    
+    
+    
 if __name__ == "__main__":        
     ##step 1
     #transfer_file()
@@ -269,20 +351,19 @@ if __name__ == "__main__":
     #parse_metadata()
     ##fastqc
     #fastqc()
-    #cut_adapt()
     #fastp()
     #bowtie_index()
     #bowtie_align_paired()
     #bowtie_align_single()
     #mk_idx_flagstat()
-    
-    #mk_idx_flagstat()
     #create_chromhmm_matrix()
     #parse_flagstat()
     #makebw_paired()
     #makebw_single()
-    rename_bam()
+    #rename_bam()
     #find_sample_input()
     #macs2_call_peaks()
     #rename_peak_file()
-    #super_enhancer()
+    super_enhancer()
+    
+   
