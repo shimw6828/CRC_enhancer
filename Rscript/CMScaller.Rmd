@@ -1,0 +1,368 @@
+---
+title: "CMScaller"
+author: "shimw6828"
+date: "2021/7/26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 初始化
+
+```{r cars}
+library(Biobase)
+library(CMScaller)
+library(TCGAbiolinks)
+library(dplyr)
+library(DESeq2)
+setwd("/home/shimw/project/enhancer_map/")
+```
+
+## TCGA数据获取
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+cancer_type <- "TCGA-COAD"
+query <- GDCquery(
+  project = cancer_type,
+  data.category = "Transcriptome Profiling", 
+  data.type = "Gene Expression Quantification",
+  workflow.type = "HTSeq - Counts"
+)
+
+query$results[[1]] <- query$results[[1]][!query$results[[1]]$is_ffpe,]
+data <- GDCprepare(query)
+data <- data[,!is.na(data$sample_type)]
+data$tumortype <- factor(ifelse(data$sample_type=="Solid Tissue Normal","Normal","Tumor"))
+feature <- colData(data)
+tumor = feature[feature$tumortype=="Tumor",]
+count_mt <- assays(data)$"HTSeq - Counts"
+tumor_count <- count_mt[,tumor$barcode]
+normal_count <- count_mt[,feature[feature$tumortype!="Tumor",]$barcode]
+write.csv(tumor_count,"/home/shimw/project/enhancer_map/colon_tumor_count.csv", quote = F)
+write.csv(normal_count,"/home/shimw/project/enhancer_map/colon_normal_count.csv", quote = F)
+
+
+```
+
+## CMS分类
+```{r}
+par(mfrow=c(1,2))
+
+res <- CMScaller(tumor_count, RNAseq=TRUE, doPlot=TRUE, rowNames = "ensg", seed = 1)
+cmstypes <- data.frame("barcode"=row.names(res), "type"=res$prediction)
+unique(cmstypes$type)
+cmstypes$type <- as.vector(cmstypes$type)
+cmstypes$type[is.na(cmstypes$type)] = "none"
+cmstypes$type = factor(cmstypes$type)
+table(cmstypes$type)
+kk=as.data.frame(table(cmstypes$type))
+names(kk) = c("type","number")
+p<-ggplot(data=kk, aes(x=type, y=number, fill = type)) +
+  geom_bar(stat="identity", width=0.5)
+```
+
+## DESeq2鉴定
+
+```{r}
+deseq_func <- function(cmstype){
+  countdata <- cbind(tumor_count[,cmstypes$barcode[cmstypes$type==cmstype]], normal_count)
+
+  coldata = data.frame(row.names = colnames(countdata),
+                       "type" = c(rep(cmstype,length(colnames(countdata)) - length(colnames(normal_count))),
+                                  rep("normal",length(colnames(normal_count))))
+                       )
+  dds <- DESeqDataSetFromMatrix(countData = countdata, colData = coldata, design = ~type)
+  dds_obj <- DESeq(dds)
+  res <- results(dds_obj, contrast=c("type", cmstype, "normal"))
+  res <- as.data.frame(res)
+  res <- res[order(res$padj),]
+  res <- tibble::rownames_to_column(res, var = "gene")
+  return(tibble::tibble("type"=cmstype, "res"=list(res)))
+}
+result <- purrr::map(as.vector(unique(cmstypes$type)), deseq_func)
+result <- dplyr::bind_rows(result)
+
+for (cmstype in as.vector(unique(cmstypes$type))) {
+  readr::write_csv(result$res[result$type==cmstype][[1]], paste("/home/shimw/project/enhancer_map/CMScaller/", cmstype, ".csv", sep=""))
+}
+```
+
+## 做log2F的correction
+
+```{r}
+#mouse
+all_mouse_DEG=read.csv("/home/panxl/CRC/all_mouse_data/all_mouse_DEG_data.csv",row.names = 1)
+HOM_one2one=read.csv("/home/panxl/CRC/RNA_seq/HOM_ONE2ONE.txt",sep=",")
+HOM_one2one=HOM_one2one[HOM_one2one$Mouse.homology.type=="ortholog_one2one",]
+mouse_logFC1 <- all_mouse_DEG[abs(all_mouse_DEG$log2FoldChange)>=1 &all_mouse_DEG$padj<=0.01,]#3676
+mouse_logFC1 =mouse_logFC1[mouse_logFC1$Row.names%in%HOM_one2one$Mouse.gene.stable.ID,]#2189
+a=HOM_one2one[HOM_one2one$Mouse.gene.stable.ID%in%mouse_logFC1$Row.names,]#
+#human
+cmstype = "CMS4"
+human_data = result$res[result$type==cmstype][[1]]
+names(human_data)[1] = "Row.names"
+
+human_logFC1  =human_data[abs(human_data$log2FoldChange)>=1 &human_data$padj<=0.01,]#8948
+human_logFC1 =human_logFC1 [human_logFC1 $Row.names%in%HOM_one2one$Gene.stable.ID,]#4402
+b=HOM_one2one[HOM_one2one$Gene.stable.ID%in%human_logFC1$Row.names,]#4402
+#H0M_logFC1_data
+nohuman_mouse=human_data[human_data$Row.names%in%a$Gene.stable.ID,]#2123
+nomouse_human=all_mouse_DEG[all_mouse_DEG$Row.names%in%b$Mouse.gene.stable.ID,]#4187
+nohuman_mouse=HOM_one2one[HOM_one2one$Gene.stable.ID%in%nohuman_mouse$Row.names,]#2123
+nomouse_human=HOM_one2one[HOM_one2one$Mouse.gene.stable.ID%in%nomouse_human$Row.names,]#4187
+H0M_logFC1=rbind(nohuman_mouse,nomouse_human)#6310
+H0M_logFC1=unique(H0M_logFC1)#5287
+mouse_logFC1 =all_mouse_DEG[all_mouse_DEG$Row.names%in%H0M_logFC1$Mouse.gene.stable.ID,]#5287
+mouse_logFC1 =mouse_logFC1[,c(1,3)]
+colnames(mouse_logFC1)=c("Mouse.gene.stable.ID","Mouse_logFC1")
+human_logFC1 =human_data [human_data $Row.names%in%H0M_logFC1$Gene.stable.ID,]#5287
+human_logFC1 =human_logFC1 [,c(1,3)]#5287
+colnames(human_logFC1)=c("Gene.stable.ID","Human_logFC1")
+H0M_logFC1=left_join(H0M_logFC1,mouse_logFC1,by = "Mouse.gene.stable.ID")
+H0M_logFC1=left_join(H0M_logFC1,human_logFC1,by="Gene.stable.ID")
+
+#画图
+
+
+H0M_logFC1$type = case_when(
+  H0M_logFC1$Mouse_logFC1>0&H0M_logFC1$Human_logFC1>0 ~ "Cluster 1: Up-regulated in both species",
+  H0M_logFC1$Mouse_logFC1>0&H0M_logFC1$Human_logFC1<0 ~ "Cluster 2: Up-regulated in mouse reverse in human",
+  H0M_logFC1$Mouse_logFC1<0&H0M_logFC1$Human_logFC1<0 ~ "Cluster 3: Down-regulated in both species",
+  H0M_logFC1$Mouse_logFC1<0&H0M_logFC1$Human_logFC1>0 ~ "Cluster 4: Up-regulated in human reverse in mouse"
+  )
+
+library(ggsci)
+library(ggrepel)
+library(biomaRt)
+library(reprex)
+mart <- useMart("ENSEMBL_MART_ENSEMBL", host = "ensembl.org")
+mart <- useDataset("hsapiens_gene_ensembl", mart)
+annotLookup <- getBM(mart = mart,
+                     attributes = c("external_gene_name","ensembl_gene_id", "gene_biotype"),
+                     filters = "ensembl_gene_id", values = H0M_logFC1$Gene.stable.ID,
+                     uniqueRows=TRUE)
+
+names(annotLookup)[2] = "Gene.stable.ID"
+H0M_logFC1 = dplyr::left_join(H0M_logFC1, annotLookup)
+
+ggplot(H0M_logFC1, aes(x = Human_logFC1, y = Mouse_logFC1, color = type)) +
+  geom_point(size=1) +
+  scale_color_uchicago() +
+  xlab("Human gene log2 fold change") +
+  ylab("Mouse gene log2 fold change") + 
+  theme_classic() +
+  theme(axis.title = element_text(size=28),
+        #axis.text = element_text(size=24, color="black"),
+        axis.text.x = element_text(size = 24,colour = "black", margin=margin(2, 2, 2, 2, "mm")),
+        axis.text.y = element_text(size = 24,colour = "black", margin=margin(2, 2, 2, 2, "mm")),
+        legend.title = element_blank(),
+        legend.text = element_text(size=18), legend.key.size = unit(0.6,"cm"),
+        axis.ticks.length.x = unit(2,"mm"),
+        axis.ticks.length.y = unit(2,"mm")
+  )
+cor.test(H0M_logFC1$Mouse_logFC1, H0M_logFC1$Human_logFC1)
+
+
+```
+
+
+
+
+
+
+## 对武大的CMS分类对应正常样本的marker基因寻找
+
+```{r}
+library(Seurat)
+library("SingleCellExperiment")
+##首先读入count数据
+
+countdata <- read.csv("/NAS/luozh/CRC_biomarker/CMS_type_count.csv", header = T, row.names = 1)
+cmsan = c(rep("CMS1", 11), 
+          rep("CMS2", 22), 
+          rep("CMS3", 15), 
+          rep("CMS4", 18))
+coldata = data.frame("sample" = names(countdata), "type" = cmsan, stringsAsFactors = F)
+
+
+
+sce <- SingleCellExperiment(
+  assays = list(
+    counts = as.matrix(countdata)
+  ),
+  colData=coldata
+)
+n_seob <- as.Seurat(sce, counts  = "counts", data = "counts", project = "SingleCellExperiment")
+Idents(n_seob)<-n_seob$type
+markers <- FindMarkers(n_seob, logfc.threshold = 0.01, ident.1 = "CMS4",
+                         test.use = "DESeq2")
+
+
+```
+
+## CMS1的性别差异
+
+```{r}
+## 
+library(DESeq2)
+tumor_count <- read.csv("/home/shimw/project/enhancer_map/colon_tumor_count.csv", header =T, row.names = 1, check.names=FALSE)
+feature <- as.data.frame(feature)
+sex_info <- feature%>%
+  dplyr::select(barcode, gender)
+cmstypes <- left_join(cmstypes, sex_info)
+
+
+
+#cmstypes  在上面进行了分类
+cms1_info <- cmstypes[cmstypes$type=="CMS1",]
+cms1_tumor_count <- tumor_count[,cms1_info$barcode]
+cms1_info$gender <- factor(cms1_info$gender)
+row.names(cms1_info)=cms1_info$barcode
+dds <- DESeqDataSetFromMatrix(countData = cms1_tumor_count, colData = cms1_info, design = ~gender)
+dds_obj <- DESeq(dds)
+res <- results(dds_obj, contrast=c("gender", "male", "female"))
+res <- as.data.frame(res)
+res <- res[complete.cases(res$padj),]
+res <- res[order(res$padj),]
+
+res[res$padj<0.05, ]
+nrow(res[res$padj<0.05, ])
+#343
+
+nocms1_info <- cmstypes[cmstypes$type!="CMS1",]
+nocms1_info <- na.omit(nocms1_info)
+nocms1_tumor_count <- tumor_count[,nocms1_info$barcode]
+nocms1_info$gender <- factor(nocms1_info$gender)
+row.names(nocms1_info)=nocms1_info$barcode
+nocms1dds <- DESeqDataSetFromMatrix(countData = nocms1_tumor_count, colData = nocms1_info, design = ~gender)
+nocms1dds_obj <- DESeq(nocms1dds)
+nocms1res <- results(nocms1dds_obj, contrast=c("gender", "male", "female"))
+nocms1res <- as.data.frame(nocms1res)
+nocms1res <- nocms1res[complete.cases(nocms1res$padj),]
+nocms1res <- nocms1res[order(nocms1res$padj),]
+nocms1res[nocms1res$padj<0.05, ]
+nrow(nocms1res[nocms1res$padj<0.05, ])
+nrow(nocms1res[nocms1res$padj<0.05&abs(nocms1res$log2FoldChange)>1, ])
+
+
+
+
+tumor_count <- read.csv("/home/shimw/project/enhancer_map/colon_tumor_count.csv", header =T, row.names = 1, check.names=FALSE)
+feature <- as.data.frame(feature)
+sex_info <- feature%>%
+  dplyr::select(barcode, gender)
+sex_info <- left_join(cmstypes, sex_info)
+sex_info <- na.omit(sex_info)
+tumor_count <- tumor_count[,sex_info$barcode]
+sex_info$gender <- factor(sex_info$gender)
+row.names(sex_info)=sex_info$barcode
+dds <- DESeqDataSetFromMatrix(countData = tumor_count, colData = sex_info, design = ~gender)
+dds_obj <- DESeq(dds)
+res <- results(dds_obj, contrast=c("gender", "male", "female"))
+res <- as.data.frame(res)
+res <- res[complete.cases(res$padj),]
+res <- res[order(res$padj),]
+nrow(res[res$padj<0.05&abs(res$log2FoldChange)>1, ])
+
+
+
+#feature <- as.data.frame(feature)
+sex_info <- feature%>%
+  dplyr::select(barcode, gender)
+cmstypes <- left_join(cmstypes, sex_info)
+
+ggplot(data=cmstypes, mapping=aes(x=type, fill=gender))+
+  geom_bar(stat="count", width=0.5)
+
+
+
+
+
+
+normalized_counts <- counts(dds_obj, normalized=TRUE)
+names(normalized_counts["ENSG00000140465",])
+ss = data.frame("barcode"=names(normalized_counts["ENSG00000140465",]),"count"=normalized_counts["ENSG00000140465",])
+ss = dplyr::left_join(ss, sex_info)%>%
+  filter(count<100)
+ggplot(ss, aes(gender,count,fill = gender))+geom_boxplot()
+
+#ENSG00000262406
+ss = data.frame("barcode"=names(normalized_counts["ENSG00000262406",]),"count"=normalized_counts["ENSG00000262406",])
+ss = dplyr::left_join(ss, sex_info)
+ggplot(ss, aes(gender,count,fill = gender))+geom_boxplot()+facet_grid(. ~ type)
+
+sex_deseq_func <- function(cmstype){
+  cms_info <- cmstypes[cmstypes$type==cmstype,]
+  cms_info <- na.omit(cms_info)
+  cms_tumor_count <- tumor_count[,cms_info$barcode]
+  cms_info$gender <- factor(cms_info$gender)
+  row.names(cms_info)=cms_info$barcode
+  dds <- DESeqDataSetFromMatrix(countData = cms_tumor_count, colData = cms_info, design = ~gender)
+  dds_obj <- DESeq(dds)
+  res <- results(dds_obj, contrast=c("gender", "male", "female"))
+  res <- as.data.frame(res)
+  res <- res[complete.cases(res$padj),]
+  res <- res[order(res$padj),]
+  res <- tibble::rownames_to_column(res, var = "gene")
+  return(tibble::tibble("type"=cmstype, "res"=list(res)))
+}
+result <- purrr::map(as.vector(unique(cmstypes$type))[-5], sex_deseq_func)
+result <- dplyr::bind_rows(result)
+for (cmstype in as.vector(unique(cmstypes$type))[-5]) {
+  tmp_df = result$res[result$type==cmstype][[1]]
+  print(cmstype)
+  print(nrow(tmp_df[tmp_df$padj<0.05&abs(tmp_df$log2FoldChange)>1, ]))
+}
+
+aa = data.frame("CMS type"=c("CMS1","CMS2","CMS3","CMS4","All"),
+           "DEG num"=c(227,287,176,187,164),check.names = F
+           )
+
+p<-ggplot(data=aa, aes(x=`CMS type`, y=`DEG num`, fill = `CMS type`)) +
+  geom_bar(stat="identity", width=0.5)
+
+```
+## 与x染色体上免疫基因的关系
+```{r}
+
+xhcr_immumn <- read.table("/home/shimw/project/enhancer_map/xchr_gene.txt", sep = "\t", header = T, stringsAsFactors = F)
+
+mart <- useMart("ENSEMBL_MART_ENSEMBL", host = "ensembl.org")
+mart <- useDataset("hsapiens_gene_ensembl", mart)
+annotLookup <- getBM(mart = mart,
+                     attributes = c("external_gene_name","ensembl_gene_id", "gene_biotype"),
+                     filters = "external_gene_name", values = xhcr_immumn$Name,
+                     uniqueRows=TRUE)
+
+for (cmstype in as.vector(unique(cmstypes$type))[-5]) {
+  tmp_df = result$res[result$type==cmstype][[1]]
+  print(cmstype)
+  int_gene <- intersect(tmp_df[tmp_df$padj<0.05&abs(tmp_df$log2FoldChange)>1,]$gene,annotLookup$ensembl_gene_id)
+  print(length(int_gene))
+}
+cms1_sex_diff = result$res[result$type=="CMS1"][[1]]%>%
+  dplyr::filter(padj<0.05&abs(log2FoldChange)>1)
+cms2_sex_diff = result$res[result$type=="CMS2"][[1]]%>%
+  dplyr::filter(padj<0.05&abs(log2FoldChange)>1)
+cms3_sex_diff = result$res[result$type=="CMS3"][[1]]%>%
+  dplyr::filter(padj<0.05&abs(log2FoldChange)>1)
+cms4_sex_diff = result$res[result$type=="CMS4"][[1]]%>%
+  dplyr::filter(padj<0.05&abs(log2FoldChange)>1)
+
+
+intersect(cms1_sex_diff$gene, cms2_sex_diff$gene)
+df = read.table("OMIM_ODSE.txt", sep="\t", header=T)
+df["pair"] = paste(dfGene_symbol)
+A = dfSource == "mh"
+B = dfSource == "scr"
+C = dfSource == "convert"
+library (VennDiagram)
+
+venn.diagram(x= list(CMS1 = cms1_sex_diff$gene, CMS2 = cms2_sex_diff$gene, CMS3 = cms3_sex_diff$gene, CMS4 = cms4_sex_diff$gene), filename = "My4.png", height = 450, width = 450,resolution =300, imagetype="png", col="transparent",fill=c(colors()[148], colors()[589], colors()[116], colors()[658]),alpha = 0.50, cex=0.45, cat.cex=0.45)
+
+```
+

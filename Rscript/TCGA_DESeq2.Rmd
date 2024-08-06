@@ -1,0 +1,214 @@
+---
+title: "TCGA_DESeq2"
+author: "shimw6828"
+date: "2021/7/19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#setwd("/home/shimw/project/enhancer_map/")
+library(TCGAbiolinks)
+library(dplyr)
+library(DESeq2)
+```
+
+## 获取癌症类型
+
+
+```{r}
+#获取33种的TCGA癌症
+projects <- getGDCprojects()%>%
+  dplyr::filter(substr(project_id,1,4)=="TCGA")
+
+```
+
+## 写下载数据以及运行的函数
+
+
+```{r pressure, echo=FALSE}
+##建立函数
+tcga_download <- function(cancer_type){
+    query <- GDCquery(
+    project = cancer_type,
+    data.category = "Transcriptome Profiling", 
+    data.type = "Gene Expression Quantification",
+    workflow.type = "HTSeq - Counts"
+  )
+    if (length(unique(query$results[[1]]$sample_type))!=3) {
+    print(cancer_type)
+    print(cancer_type)
+    print(cancer_type)
+    print(cancer_type)
+    print(cancer_type)
+    print(unique(query$results[[1]]$sample_type))
+    print("not ok")
+  }
+}
+tcga_deseq <- function(cancer_type){
+  #cancer_type = "TCGA-BRCA"
+  query <- GDCquery(
+    project = cancer_type,
+    data.category = "Transcriptome Profiling", 
+    data.type = "Gene Expression Quantification",
+    workflow.type = "HTSeq - Counts"
+  )
+  #unique(query$results[[1]]$sample_type)
+  if (length(unique(query$results[[1]]$sample_type))!=3) {
+    print(cancer_type)
+    print(cancer_type)
+    print(cancer_type)
+    print(cancer_type)
+    print(cancer_type)
+    print(unique(query$results[[1]]$sample_type))
+    print("not ok")
+  }
+  
+  #[1] "Primary Tumor"       "Solid Tissue Normal" "Metastatic" 
+  query$results[[1]]=query$results[[1]][!query$results[[1]]$is_ffpe,]
+  GDCdownload(query ,files.per.chunk = 30)
+  data <- GDCprepare(query)
+  data <- data[,!is.na(data$sample_type)]
+  #data <- data[,data$sample_type%in%c("Primary Tumor" ,"Solid Tissue Normal")]
+  data$tumortype <- factor(ifelse(data$sample_type=="Solid Tissue Normal","Normal","Tumor"))
+  ddsSE <- DESeqDataSet(data, design = ~ tumortype)
+  ddsSE <- DESeq(ddsSE)
+  res <- results(ddsSE, contrast=c("tumortype", "Tumor",'Normal'))
+  res <- as.data.frame(res)
+  res <- res[order(res$padj),]
+  res <- tibble::rownames_to_column(res, var = "gene")
+  readr::write_csv(res, paste("/home/shimw/ChIP-Seq/TCGA/", cancer_type, ".csv", sep=""))
+}
+
+```
+
+
+## 计算fpkm
+
+```{r}
+tcga_fpkm_download <- function(cancer_type){
+    query <- GDCquery(
+    project = cancer_type,
+    data.category = "Transcriptome Profiling", 
+    data.type = "Gene Expression Quantification",
+    workflow.type = "HTSeq - FPKM"
+  )
+  
+  query$results[[1]]=query$results[[1]][!query$results[[1]]$is_ffpe,]
+  anno <- query$results[[1]]%>%
+    dplyr::select(cases, cases.submitter_id, sample_type)
+  clinical_patient_Cancer <- GDCquery_clinic(cancer_type,"clinical")
+  clinical_patient_Cancer <- clinical_patient_Cancer%>%
+    dplyr::select(submitter_id, tumor_stage, tumor_grade, alcohol_history, years_smoked, 
+                  gender, race, age_at_index)
+  
+  Clinical_query=GDCquery(project = cancer_type,
+                        data.category = "Clinical",
+                        file.type = "xml")
+  GDCdownload(Clinical_query)
+
+  clinical=GDCprepare_clinic(Clinical_query,clinical.info = "patient")
+  if ("histological_type" %in% names(clinical)) {
+    clinical <- clinical%>%
+    dplyr::select(bcr_patient_barcode, histological_type)
+    anno <- dplyr::left_join(anno, clinical, by = c("cases.submitter_id" = "bcr_patient_barcode"))
+  }
+  anno <- dplyr::left_join(anno, clinical_patient_Cancer, by = c("cases.submitter_id" = "submitter_id"))
+  GDCdownload(query ,files.per.chunk = 30)
+  readr::write_csv(anno, paste("/home/mwshi/project/CEdb/TCGA/", cancer_type, "_anno.csv", sep=""))
+  #data <- GDCprepare(query)
+  #data <- data[,!is.na(data$sample_type)]
+  #data <- data[,data$sample_type%in%c("Primary Tumor" ,"Solid Tissue Normal")]
+  #data$tumortype <- factor(ifelse(data$sample_type=="Solid Tissue Normal","Normal","Tumor"))
+}
+
+for (cancer_type in projects$project_id) {
+  print(cancer_type)
+  if (!file.exists(paste("/home/mwshi/project/CEdb/TCGA/", cancer_type, "_anno.csv", sep=""))) {
+    tcga_fpkm_download(cancer_type)
+  }
+}
+
+library(TCGAbiolinks)
+for (cancer_type in projects$project_id) {
+  print(cancer_type)
+  if (!file.exists(paste("/home/mwshi/project/CEdb/TCGA/", cancer_type, "_fpkm.csv", sep=""))) {
+    #cancer_type="TCGA-BRCA"
+   query <- GDCquery(
+    project = cancer_type,
+    data.category = "Transcriptome Profiling", 
+    data.type = "Gene Expression Quantification",
+    workflow.type = "HTSeq - FPKM"
+  )
+   query$results[[1]]=query$results[[1]][!query$results[[1]]$is_ffpe,]
+   data <- GDCprepare(query)
+   countsdata <- SummarizedExperiment::assay(data)
+   write.csv(countsdata, paste("/home/mwshi/project/CEdb/TCGA/", cancer_type, "_fpkm.csv", sep=""), quote = F)
+  }
+}
+
+
+
+
+```
+
+
+
+
+## 运行代码
+```{r}
+
+for (cancer_type in projects$project_id) {
+  #tcga_download(cancer_type)
+  ###TCGA-LGG没有正常样本"Primary Tumor"   "Recurrent Tumor"
+  ###TCGA-DLBC没有正常样本"Primary Tumor"
+  ###TCGA-UVM没有正常样本"Primary Tumor"
+  ###TCGA-TGCT没有正常样本"Primary Tumor"            "Additional - New Primary"
+  ###TCGA-MESO没有正常样本"Primary Tumor"
+  ###TCGA-UCS没有正常样本"Primary Tumor"
+  ###TCGA-OV没有正常样本"Primary Tumor"   "Recurrent Tumor"
+  ###TCGA-LAML没有正常样本"Primary Blood Derived Cancer - Peripheral Blood"
+  ###TCGA-ACC没有正常样本"Primary Tumor"
+  
+  if (cancer_type%in%c("TCGA-LGG","TCGA-DLBC","TCGA-UVM","TCGA-TGCT","TCGA-MESO","TCGA-UCS","TCGA-OV","TCGA-LAML","TCGA-ACC")){
+    next
+  }
+  print(cancer_type)
+  if (!file.exists(paste("/home/shimw/ChIP-Seq/TCGA/", cancer_type, ".csv", sep=""))) {
+    tcga_deseq(cancer_type)
+  }
+}
+```
+## 合并癌症
+
+```{r}
+###把把不同癌症类型的类型合并
+setwd("/home/shimw/project/enhancer_map/TCGA/")
+files=list.files(path = "/home/shimw/project/enhancer_map/TCGA/",pattern=".*?.csv")
+feature=readr::read_csv(files[1])
+ldata=function(a){
+  a=readr::read_csv(a)
+  a=a[match(feature$gene,a$gene),]
+  return(a$log2FoldChange)
+}
+pdata=function(a){
+  a=readr::read_csv(a)
+  a=a[match(feature$gene,a$gene),]
+  return(a$padj)
+}
+reads_log <- as.data.frame(sapply(files,ldata))
+names(reads_log)=stringr::str_c("log2F",stringr::str_sub(names(reads_log),end=-5), sep = ".", collapse = NULL)
+reads_padj=as.data.frame(sapply(files,pdata))
+names(reads_padj)=stringr::str_c("padj",stringr::str_sub(names(reads_padj),end=-5), sep = ".", collapse = NULL)
+
+result <- cbind(reads_log, reads_padj)
+col_order = c(rbind(stringr::str_c("log2F",stringr::str_sub(files,end=-5), sep = ".", collapse = NULL), stringr::str_c("padj",stringr::str_sub(files,end=-5), sep = ".", collapse = NULL)))
+result <- result[,col_order]
+rownames(result)=feature$gene
+
+
+result = tibble::rownames_to_column(result, var = "gene")
+#result
+readr::write_csv(result, "/home/shimw/project/enhancer_map/deseq_sumary.csv")
+
+```
